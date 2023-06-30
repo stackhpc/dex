@@ -1,0 +1,80 @@
+name: Artifacts
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: read
+
+jobs:
+  container-image:
+    name: Container image
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        variant:
+          - alpine
+          - distroless
+
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@2b82ce82d56a2a04d2637cd93a637ae1b359c0a7 # v2.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@ecf95283f03858871ff00b787d79c419715afc34 # v2.7.0
+
+      - name: Gather build metadata
+        id: meta
+        uses: docker/metadata-action@818d4b7b91585d195f67373fd9cb0332e31a7175 # v4.6.0
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+          flavor: |
+            latest = false
+          tags: |
+            type=ref,event=branch,enable=${{ matrix.variant == 'alpine' }}
+            type=ref,event=pr,prefix=pr-,enable=${{ matrix.variant == 'alpine' }}
+            type=semver,pattern={{raw}},enable=${{ matrix.variant == 'alpine' }}
+            type=raw,value=latest,enable=${{ github.ref_name == github.event.repository.default_branch && matrix.variant == 'alpine' }}
+            type=ref,event=branch,suffix=-${{ matrix.variant }}
+            type=ref,event=pr,prefix=pr-,suffix=-${{ matrix.variant }}
+            type=semver,pattern={{raw}},suffix=-${{ matrix.variant }}
+            type=raw,value=latest,enable={{is_default_branch}},suffix=-${{ matrix.variant }}
+          labels: |
+            org.opencontainers.image.documentation=https://dexidp.io/docs/
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc # v2.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@2eb1c1961a95fc15694676618e422e8ba1d63825 # v4.1.1
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            BASE_IMAGE=${{ matrix.variant }}
+            VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+            COMMIT_HASH=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.revision'] }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          push: true
